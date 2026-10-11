@@ -17,7 +17,7 @@
   Airpath transforms urban mobility by routing active commuters through cleaner air corridors — lowering particulate inhalation by up to <b>40%</b> with negligible time compromise.
 </p>
 
-[Key Features](#-key-features) • [Architecture](#-system-architecture) • [AWS Integration](#-aws-open-source--cloud-architecture) • [Quick Start](#-quick-start) • [Repository Structure](#-repository-structure)
+[Key Features](#-key-features) • [Architecture](#-system-architecture) • [AWS Integration](#-aws-open-source--cloud-architecture) • [UX Design](#-product-design--the-30-laws-of-ux) • [Quick Start](#-quick-start) • [Repository Structure](#-repository-structure)
 
 ---
 
@@ -179,6 +179,22 @@ sequenceDiagram
   - 🚶 **Walking**: $1.0\times$ baseline inhalation
   - 🚲 **Cycling**: $1.4\times$ baseline inhalation
   - 🏃 **Running**: $1.9\times$ baseline inhalation
+
+---
+
+## 🧠 Product Design & The 30 Laws of UX
+
+Airpath’s user interface and algorithmic decision pathways are intentionally modeled on **[Jon Yablonski’s 30 Laws of UX](https://lawsofux.com/)**. Every single law maps directly to a tangible UI element, algorithmic behavior, or interaction flow:
+
+| UX Dimension | Key Laws Applied | Implementation in Airpath |
+| :--- | :--- | :--- |
+| **Visual Perception** | *Aesthetic-Usability, Common Region, Proximity, Similarity, Uniform Connectedness, Prägnanz* | Frosted glassmorphism, bounded data panels, high-contrast Leaflet vector ribbons, and unified pin connector lines. |
+| **Cognitive Simplicity** | *Choice Overload, Hick’s Law, Cognitive Load, Cognitive Bias, Occam’s Razor, Tesler’s Law* | Exactly 3 route options, 0–100 AirScore, automated Lowest AQI preselection, and zero atmospheric math required by the user. |
+| **Speed & Flow** | *Doherty Threshold (<400ms), Fitts’s Law, Postel’s Law, Flow* | <150ms cached Photon autocomplete, 42px touch targets, error-tolerant place input, and seamless camera-tracking pans. |
+| **Motivation & Habits** | *Goal-Gradient, Peak-End Rule, Von Restorff, Selective Attention, Zeigarnik* | BreathBudget daily limit tracker, isolated emerald route card, glowing route reveal peak, and AWS sync confirmation. |
+| **Memory & Familiarity** | *Jakob’s Law, Mental Model, Active User, Chunking, Miller’s Law, Serial Position, Pareto Principle* | Instant prefilled routes, 4-gas chunking, side-by-side comparative memory, and green corridors targeting the 20% most polluted bottlenecks. |
+
+> 📖 **Full Specification**: Read the complete 30-law analysis with in-depth breakdowns in [`docs/UX_ARCHITECTURE.md`](docs/UX_ARCHITECTURE.md).
 
 ---
 
