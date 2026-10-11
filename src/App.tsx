@@ -65,6 +65,8 @@ export type PlaceSuggestion = {
   full: string;
   lat: number;
   lon: number;
+  category?: string;
+  distanceKm?: number;
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -177,9 +179,28 @@ async function fetchAirAt(lat: number, lon: number): Promise<AirData> {
   };
 }
 
-// ─── Geocoding (Nominatim OpenStreetMap) ──────────────────────────────────────
+// ─── Geocoding (Photon + Nominatim OpenStreetMap) ────────────────────────────
 async function geocode(query: string): Promise<LatLon> {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=en`;
+  const trimmed = query.trim();
+  if (!trimmed) throw new Error('Please enter a location');
+
+  // 1. Try Photon first (instant global & regional OSM geocoding)
+  try {
+    const pUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmed)}&limit=1`;
+    const res = await fetch(pUrl, { headers: { Accept: 'application/json' } });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.features && data.features.length > 0) {
+        const coords = data.features[0].geometry.coordinates;
+        if (coords && coords.length >= 2) {
+          return [coords[1], coords[0]];
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Fallback to Nominatim OpenStreetMap
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(trimmed)}&format=json&limit=1&accept-language=en`;
   const res = await fetch(url, { headers: { 'User-Agent': 'Airpath-SmartRouter/1.0 (contact@airpath.dev)' } });
   const data: { lat: string; lon: string }[] = await res.json();
   if (!data.length) throw new Error(`"${query}" not found — try a more specific location`);
@@ -829,9 +850,26 @@ const NAV_ITEMS = [
   { id: 'saved',    label: 'Saved routes',   icon: Bookmark },
 ];
 
+function computeDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 const suggestionsCache = new Map<string, PlaceSuggestion[]>();
 
-async function searchPlaceSuggestions(query: string, cityName: string): Promise<PlaceSuggestion[]> {
+async function searchPlaceSuggestions(
+  query: string,
+  cityName: string,
+  centerLat?: number,
+  centerLon?: number
+): Promise<PlaceSuggestion[]> {
   const trimmed = query.trim();
   const defaultList = CITY_LANDMARKS[cityName] || CITY_LANDMARKS['New Delhi'] || [];
 
@@ -839,47 +877,130 @@ async function searchPlaceSuggestions(query: string, cityName: string): Promise<
     return defaultList;
   }
 
-  const cacheKey = `${trimmed.toLowerCase()}__${cityName}`;
+  const cacheKey = `${trimmed.toLowerCase()}__${cityName}__${centerLat?.toFixed(2)}_${centerLon?.toFixed(2)}`;
   if (suggestionsCache.has(cacheKey)) {
     return suggestionsCache.get(cacheKey)!;
   }
 
-  try {
-    const q = trimmed.toLowerCase().includes(cityName.toLowerCase()) ? trimmed : `${trimmed}, ${cityName}`;
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=en&addressdetails=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Airpath-SmartRouter/1.0 (contact@airpath.dev)' } });
-    const data = await res.json();
-    const results: PlaceSuggestion[] = data.map((d: any) => {
-      const parts = d.display_name.split(', ');
-      return {
-        title: parts[0] || d.display_name,
-        subtitle: parts.slice(1, 4).join(', '),
-        full: parts.slice(0, 3).join(', '),
-        lat: parseFloat(d.lat),
-        lon: parseFloat(d.lon),
-      };
-    });
+  const results: PlaceSuggestion[] = [];
+  const seen = new Set<string>();
 
-    const localMatches = defaultList.filter(l =>
+  // 1. Photon API (OpenStreetMap real-time search with lat/lon proximity bias)
+  try {
+    const latParam = centerLat !== undefined ? `&lat=${centerLat}` : '';
+    const lonParam = centerLon !== undefined ? `&lon=${centerLon}` : '';
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmed)}&limit=12${latParam}${lonParam}`;
+    const pRes = await fetch(photonUrl, { headers: { Accept: 'application/json' } });
+    if (pRes.ok) {
+      const data = await pRes.json();
+      for (const f of data.features || []) {
+        const p = f.properties || {};
+        const coords = f.geometry?.coordinates || [];
+        const itemLat = coords[1];
+        const itemLon = coords[0];
+        if (typeof itemLat !== 'number' || typeof itemLon !== 'number') continue;
+
+        const title = p.name || [p.street, p.housenumber].filter(Boolean).join(' ') || p.city || 'Location';
+        const subParts = [p.district, p.locality, p.city, p.state, p.country].filter(Boolean);
+        const uniqueSub = Array.from(new Set(subParts.filter(s => s.toLowerCase() !== title.toLowerCase())));
+        const subtitle = uniqueSub.slice(0, 3).join(', ');
+        const full = subtitle ? `${title}, ${subtitle}` : title;
+
+        const key = `${title.toLowerCase()}__${itemLat.toFixed(3)}_${itemLon.toFixed(3)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const dist = centerLat !== undefined && centerLon !== undefined ? computeDistanceKm(centerLat, centerLon, itemLat, itemLon) : undefined;
+          results.push({
+            title,
+            subtitle,
+            full,
+            lat: itemLat,
+            lon: itemLon,
+            category: p.osm_value || p.type || 'place',
+            distanceKm: dist,
+          });
+        }
+      }
+    }
+  } catch {
+    // Continue to Nominatim fallback
+  }
+
+  // 2. OpenStreetMap Nominatim search (with soft viewbox bias bounded=0 if center provided)
+  if (results.length < 5) {
+    try {
+      const viewboxParam =
+        centerLat !== undefined && centerLon !== undefined
+          ? `&viewbox=${centerLon - 2},${centerLat + 2},${centerLon + 2},${centerLat - 2}&bounded=0`
+          : '';
+      const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(trimmed)}&format=json&limit=10&accept-language=en&addressdetails=1${viewboxParam}`;
+      const nRes = await fetch(nomUrl, {
+        headers: { 'User-Agent': 'Airpath-SmartRouter/1.0 (contact@airpath.dev)' },
+      });
+      if (nRes.ok) {
+        const nData = await nRes.json();
+        for (const d of Array.isArray(nData) ? nData : []) {
+          const parts = (d.display_name || '').split(', ');
+          const title = d.name || parts[0] || 'Location';
+          const subtitle = parts.slice(1, 4).join(', ');
+          const full = parts.slice(0, 3).join(', ');
+          const itemLat = parseFloat(d.lat);
+          const itemLon = parseFloat(d.lon);
+          if (isNaN(itemLat) || isNaN(itemLon)) continue;
+
+          const key = `${title.toLowerCase()}__${itemLat.toFixed(3)}_${itemLon.toFixed(3)}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            const dist = centerLat !== undefined && centerLon !== undefined ? computeDistanceKm(centerLat, centerLon, itemLat, itemLon) : undefined;
+            results.push({
+              title,
+              subtitle,
+              full: full || title,
+              lat: itemLat,
+              lon: itemLon,
+              category: d.type || d.class || 'place',
+              distanceKm: dist,
+            });
+          }
+        }
+      }
+    } catch {
+      // Continue to local match
+    }
+  }
+
+  // 3. Merge curated local landmarks that match query
+  const localMatches = defaultList.filter(
+    l =>
       l.title.toLowerCase().includes(trimmed.toLowerCase()) ||
       l.subtitle.toLowerCase().includes(trimmed.toLowerCase())
-    );
-
-    const merged = [...localMatches];
-    results.forEach(r => {
-      if (!merged.some(m => Math.abs(m.lat - r.lat) < 0.001 && Math.abs(m.lon - r.lon) < 0.001)) {
-        merged.push(r);
-      }
-    });
-
-    const finalResults = merged.slice(0, 6);
-    suggestionsCache.set(cacheKey, finalResults);
-    return finalResults;
-  } catch {
-    return defaultList.filter(l =>
-      l.title.toLowerCase().includes(trimmed.toLowerCase())
-    );
+  );
+  for (const m of localMatches) {
+    const key = `${m.title.toLowerCase()}__${m.lat.toFixed(3)}_${m.lon.toFixed(3)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      const dist = centerLat !== undefined && centerLon !== undefined ? computeDistanceKm(centerLat, centerLon, m.lat, m.lon) : undefined;
+      results.push({
+        ...m,
+        category: 'landmark',
+        distanceKm: dist,
+      });
+    }
   }
+
+  // 4. Sort: boost metropolitan places within 120km to top, followed by global places
+  results.sort((a, b) => {
+    const aNear = (a.distanceKm ?? 9999) < 120;
+    const bNear = (b.distanceKm ?? 9999) < 120;
+    if (aNear && !bNear) return -1;
+    if (!aNear && bNear) return 1;
+    if (aNear && bNear) return (a.distanceKm ?? 0) - (b.distanceKm ?? 0);
+    return 0;
+  });
+
+  const finalResults = results.slice(0, 10);
+  suggestionsCache.set(cacheKey, finalResults);
+  return finalResults;
 }
 
 function PlaceInput({
@@ -889,6 +1010,8 @@ function PlaceInput({
   onSelect,
   placeholder,
   cityName,
+  centerLat,
+  centerLon,
   markerClass,
   onSubmit,
 }: {
@@ -898,6 +1021,8 @@ function PlaceInput({
   onSelect: (p: PlaceSuggestion) => void;
   placeholder: string;
   cityName: string;
+  centerLat?: number;
+  centerLon?: number;
   markerClass: string;
   onSubmit: () => void;
 }) {
@@ -923,18 +1048,18 @@ function PlaceInput({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await searchPlaceSuggestions(value, cityName);
+        const res = await searchPlaceSuggestions(value, cityName, centerLat, centerLon);
         if (active) setSuggestions(res);
       } finally {
         if (active) setLoading(false);
       }
-    }, isShort ? 0 : 260);
+    }, isShort ? 0 : 200);
 
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [value, cityName, isOpen]);
+  }, [value, cityName, centerLat, centerLon, isOpen]);
 
   return (
     <div className="location-field-wrapper" ref={containerRef}>
@@ -980,19 +1105,23 @@ function PlaceInput({
       {isOpen && (
         <div className="places-suggestions-menu" role="listbox">
           <div className="places-suggestion-header">
-            <span>{value.trim().length >= 2 ? 'Place suggestions' : `Popular in ${cityName}`}</span>
-            {loading && <RefreshCw size={11} className="spin" />}
+            <span>{value.trim().length >= 2 ? 'All places & landmarks' : `Popular in ${cityName}`}</span>
+            {loading ? (
+              <RefreshCw size={11} className="spin" />
+            ) : (
+              suggestions.length > 0 && <span className="place-count-tag">{suggestions.length} places</span>
+            )}
           </div>
 
           {suggestions.length === 0 && !loading && (
             <div className="places-loading-hint">
-              <span>No places found. Try typing a street or area name.</span>
+              <span>No places found. Try typing another street or landmark.</span>
             </div>
           )}
 
           {suggestions.map((item, idx) => (
             <button
-              key={`${item.title}-${item.lat}-${idx}`}
+              key={`${item.title}-${item.lat}-${item.lon}-${idx}`}
               type="button"
               className="places-suggestion-item"
               onClick={() => {
@@ -1004,7 +1133,12 @@ function PlaceInput({
                 <MapPin size={13} />
               </span>
               <div className="places-suggestion-info">
-                <strong className="places-suggestion-title">{item.title}</strong>
+                <div className="places-suggestion-title-row">
+                  <strong className="places-suggestion-title">{item.title}</strong>
+                  {item.category && (
+                    <span className="place-category-badge">{item.category}</span>
+                  )}
+                </div>
                 {item.subtitle && <span className="places-suggestion-sub">{item.subtitle}</span>}
               </div>
             </button>
@@ -1478,6 +1612,8 @@ export default function App() {
                       }}
                       placeholder={`e.g. Connaught Place, ${city.name}`}
                       cityName={city.name}
+                      centerLat={city.lat}
+                      centerLon={city.lon}
                       markerClass="origin-marker"
                       onSubmit={() => void findRoutes()}
                     />
@@ -1508,6 +1644,8 @@ export default function App() {
                       }}
                       placeholder={`e.g. Lodhi Garden, ${city.name}`}
                       cityName={city.name}
+                      centerLat={city.lat}
+                      centerLon={city.lon}
                       markerClass="destination-marker"
                       onSubmit={() => void findRoutes()}
                     />
