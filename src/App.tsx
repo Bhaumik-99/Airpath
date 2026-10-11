@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, Popup, useMap } from 'react-leaflet';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, AlertTriangle, ArrowDownUp, ArrowRight, ArrowUpRight,
   Bell, BellOff, Bike, Bookmark, Check, ChevronDown, CircleHelp,
@@ -59,7 +59,47 @@ export type ExposureEntry = {
   location: string;
 };
 
+export type PlaceSuggestion = {
+  title: string;
+  subtitle: string;
+  full: string;
+  lat: number;
+  lon: number;
+};
+
 // ─── Constants ────────────────────────────────────────────────────────────────
+const CITY_LANDMARKS: Record<string, PlaceSuggestion[]> = {
+  'New Delhi': [
+    { title: 'Connaught Place', subtitle: 'Central Delhi, Delhi', full: 'Connaught Place, New Delhi', lat: 28.6315, lon: 77.2167 },
+    { title: 'Lodhi Garden', subtitle: 'Lodhi Road, New Delhi', full: 'Lodhi Garden, New Delhi', lat: 28.5933, lon: 77.2217 },
+    { title: 'India Gate', subtitle: 'Central Vista, New Delhi', full: 'India Gate, New Delhi', lat: 28.6129, lon: 77.2295 },
+    { title: 'Hauz Khas Deer Park', subtitle: 'Hauz Khas, South Delhi', full: 'Hauz Khas Deer Park, New Delhi', lat: 28.5535, lon: 77.1945 },
+    { title: 'Nehru Park', subtitle: 'Chanakyapuri, New Delhi', full: 'Nehru Park, Chanakyapuri, New Delhi', lat: 28.5912, lon: 77.1942 },
+    { title: 'Red Fort', subtitle: 'Chandni Chowk, Old Delhi', full: 'Red Fort, New Delhi', lat: 28.6562, lon: 77.2410 },
+  ],
+  Mumbai: [
+    { title: 'Marine Drive Promenade', subtitle: 'South Mumbai, Maharashtra', full: 'Marine Drive, Mumbai', lat: 18.9432, lon: 72.8230 },
+    { title: 'Bandra Bandstand', subtitle: 'Bandra West, Mumbai', full: 'Bandra Bandstand, Mumbai', lat: 19.0430, lon: 72.8198 },
+    { title: 'Gateway of India', subtitle: 'Colaba, South Mumbai', full: 'Gateway of India, Mumbai', lat: 18.9220, lon: 72.8347 },
+    { title: 'Sanjay Gandhi National Park', subtitle: 'Borivali East, Mumbai', full: 'Sanjay Gandhi National Park, Mumbai', lat: 19.2288, lon: 72.9182 },
+    { title: 'Shivaji Park', subtitle: 'Dadar West, Mumbai', full: 'Shivaji Park, Mumbai', lat: 19.0269, lon: 72.8378 },
+  ],
+  Bengaluru: [
+    { title: 'Cubbon Park', subtitle: 'Kasturba Road, Central Bengaluru', full: 'Cubbon Park, Bengaluru', lat: 12.9763, lon: 77.5929 },
+    { title: 'Lalbagh Botanical Garden', subtitle: 'Mavalli, South Bengaluru', full: 'Lalbagh Botanical Garden, Bengaluru', lat: 12.9507, lon: 77.5848 },
+    { title: 'Indiranagar 100ft Road', subtitle: 'Indiranagar, East Bengaluru', full: 'Indiranagar, Bengaluru', lat: 12.9784, lon: 77.6408 },
+    { title: 'Ulsoor Lake', subtitle: 'Halasuru, Bengaluru', full: 'Ulsoor Lake, Bengaluru', lat: 12.9827, lon: 77.6200 },
+    { title: 'Koramangala 4th Block', subtitle: 'Koramangala, Bengaluru', full: 'Koramangala, Bengaluru', lat: 12.9339, lon: 77.6233 },
+  ],
+  London: [
+    { title: 'Hyde Park & Serpentine', subtitle: 'Westminster, Central London', full: 'Hyde Park, London', lat: 51.5073, lon: -0.1657 },
+    { title: "Regent's Park", subtitle: 'Camden, North Central London', full: "Regent's Park, London", lat: 51.5313, lon: -0.1570 },
+    { title: 'Tower Bridge Promenade', subtitle: 'Southwark, London', full: 'Tower Bridge, London', lat: 51.5055, lon: -0.0754 },
+    { title: 'Covent Garden', subtitle: 'West End, London', full: 'Covent Garden, London', lat: 51.5117, lon: -0.1240 },
+    { title: 'Victoria Park', subtitle: 'Tower Hamlets, East London', full: 'Victoria Park, London', lat: 51.5365, lon: -0.0396 },
+  ],
+};
+
 const CITIES: City[] = [
   { name: 'New Delhi',  lat: 28.6139, lon: 77.2090, area: 'Central Delhi, India' },
   { name: 'Mumbai',     lat: 19.0760, lon: 72.8777, area: 'South Mumbai, India' },
@@ -789,6 +829,192 @@ const NAV_ITEMS = [
   { id: 'saved',    label: 'Saved routes',   icon: Bookmark },
 ];
 
+const suggestionsCache = new Map<string, PlaceSuggestion[]>();
+
+async function searchPlaceSuggestions(query: string, cityName: string): Promise<PlaceSuggestion[]> {
+  const trimmed = query.trim();
+  const defaultList = CITY_LANDMARKS[cityName] || CITY_LANDMARKS['New Delhi'] || [];
+
+  if (!trimmed || trimmed.length < 2) {
+    return defaultList;
+  }
+
+  const cacheKey = `${trimmed.toLowerCase()}__${cityName}`;
+  if (suggestionsCache.has(cacheKey)) {
+    return suggestionsCache.get(cacheKey)!;
+  }
+
+  try {
+    const q = trimmed.toLowerCase().includes(cityName.toLowerCase()) ? trimmed : `${trimmed}, ${cityName}`;
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=en&addressdetails=1`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Airpath-SmartRouter/1.0 (contact@airpath.dev)' } });
+    const data = await res.json();
+    const results: PlaceSuggestion[] = data.map((d: any) => {
+      const parts = d.display_name.split(', ');
+      return {
+        title: parts[0] || d.display_name,
+        subtitle: parts.slice(1, 4).join(', '),
+        full: parts.slice(0, 3).join(', '),
+        lat: parseFloat(d.lat),
+        lon: parseFloat(d.lon),
+      };
+    });
+
+    const localMatches = defaultList.filter(l =>
+      l.title.toLowerCase().includes(trimmed.toLowerCase()) ||
+      l.subtitle.toLowerCase().includes(trimmed.toLowerCase())
+    );
+
+    const merged = [...localMatches];
+    results.forEach(r => {
+      if (!merged.some(m => Math.abs(m.lat - r.lat) < 0.001 && Math.abs(m.lon - r.lon) < 0.001)) {
+        merged.push(r);
+      }
+    });
+
+    const finalResults = merged.slice(0, 6);
+    suggestionsCache.set(cacheKey, finalResults);
+    return finalResults;
+  } catch {
+    return defaultList.filter(l =>
+      l.title.toLowerCase().includes(trimmed.toLowerCase())
+    );
+  }
+}
+
+function PlaceInput({
+  label,
+  value,
+  onChange,
+  onSelect,
+  placeholder,
+  cityName,
+  markerClass,
+  onSubmit,
+}: {
+  label: string;
+  value: string;
+  onChange: (val: string) => void;
+  onSelect: (p: PlaceSuggestion) => void;
+  placeholder: string;
+  cityName: string;
+  markerClass: string;
+  onSubmit: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    const isShort = value.trim().length < 2;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await searchPlaceSuggestions(value, cityName);
+        if (active) setSuggestions(res);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }, isShort ? 0 : 260);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [value, cityName, isOpen]);
+
+  return (
+    <div className="location-field-wrapper" ref={containerRef}>
+      <label className="location-input">
+        <span className={`location-marker ${markerClass}`} />
+        <div className="location-input-body">
+          <span className="input-caption">{label}</span>
+          <input
+            aria-label={`${label} location`}
+            value={value}
+            onChange={e => {
+              onChange(e.target.value);
+              setIsOpen(true);
+            }}
+            onFocus={() => setIsOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                setIsOpen(false);
+                onSubmit();
+              } else if (e.key === 'Escape') {
+                setIsOpen(false);
+              }
+            }}
+            placeholder={placeholder}
+          />
+        </div>
+        {value ? (
+          <button
+            type="button"
+            className="input-clear-btn"
+            onClick={e => {
+              e.preventDefault();
+              onChange('');
+              setIsOpen(true);
+            }}
+            aria-label="Clear location"
+          >
+            <X size={13} />
+          </button>
+        ) : null}
+      </label>
+
+      {isOpen && (
+        <div className="places-suggestions-menu" role="listbox">
+          <div className="places-suggestion-header">
+            <span>{value.trim().length >= 2 ? 'Place suggestions' : `Popular in ${cityName}`}</span>
+            {loading && <RefreshCw size={11} className="spin" />}
+          </div>
+
+          {suggestions.length === 0 && !loading && (
+            <div className="places-loading-hint">
+              <span>No places found. Try typing a street or area name.</span>
+            </div>
+          )}
+
+          {suggestions.map((item, idx) => (
+            <button
+              key={`${item.title}-${item.lat}-${idx}`}
+              type="button"
+              className="places-suggestion-item"
+              onClick={() => {
+                onSelect(item);
+                setIsOpen(false);
+              }}
+            >
+              <span className="places-suggestion-icon">
+                <MapPin size={13} />
+              </span>
+              <div className="places-suggestion-info">
+                <strong className="places-suggestion-title">{item.title}</strong>
+                {item.subtitle && <span className="places-suggestion-sub">{item.subtitle}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App Component ────────────────────────────────────────────────────────────
 export default function App() {
   const [activeNav, setActiveNav] = useState('planner');
@@ -842,10 +1068,10 @@ export default function App() {
     if (!origin.trim() || !destination.trim()) return;
     setRouteLoading(true); setRouteError('');
     try {
-      // 1. Geocode both addresses
+      // 1. Geocode both addresses if coordinates are not already known from autocomplete
       const [oCoords, dCoords] = await Promise.all([
-        geocode(origin),
-        geocode(destination),
+        originCoords ? Promise.resolve(originCoords) : geocode(origin),
+        destCoords   ? Promise.resolve(destCoords)   : geocode(destination),
       ]);
       setOriginCoords(oCoords);
       setDestCoords(dCoords);
@@ -951,8 +1177,21 @@ export default function App() {
           <div className="city-menu">
             {CITIES.map(opt => (
               <button key={opt.name} onClick={() => {
-                setCity(opt); setShowCityMenu(false); void loadAir(opt);
-                setOrigin(`Connaught Place, ${opt.name}`); setDestination(`Central Park, ${opt.name}`);
+                setCity(opt);
+                setShowCityMenu(false);
+                void loadAir(opt);
+                const landmarks = CITY_LANDMARKS[opt.name] || [];
+                if (landmarks.length >= 2) {
+                  setOrigin(landmarks[0].full);
+                  setOriginCoords([landmarks[0].lat, landmarks[0].lon]);
+                  setDestination(landmarks[1].full);
+                  setDestCoords([landmarks[1].lat, landmarks[1].lon]);
+                } else {
+                  setOrigin(`Central ${opt.name}`);
+                  setOriginCoords(null);
+                  setDestination('');
+                  setDestCoords(null);
+                }
               }}>
                 {opt.name}{city.name === opt.name && <Check size={14} />}
               </button>
@@ -1226,28 +1465,52 @@ export default function App() {
                 </div>
                 <div className="search-controls">
                   <div className="location-fields">
-                    <label className="location-input origin-field">
-                      <span className="location-marker origin-marker" />
-                      <span className="input-caption">FROM</span>
-                      <input aria-label="Starting location" value={origin}
-                        onChange={e => { setOrigin(e.target.value); }}
-                        onKeyDown={e => e.key === 'Enter' && void findRoutes()}
-                        placeholder="e.g. Connaught Place, New Delhi" />
-                    </label>
-                    <button className="swap-button" aria-label="Swap" onClick={() => {
-                      setOrigin(destination);
-                      setDestination(origin);
-                    }}>
+                    <PlaceInput
+                      label="FROM"
+                      value={origin}
+                      onChange={val => {
+                        setOrigin(val);
+                        setOriginCoords(null);
+                      }}
+                      onSelect={place => {
+                        setOrigin(place.full);
+                        setOriginCoords([place.lat, place.lon]);
+                      }}
+                      placeholder={`e.g. Connaught Place, ${city.name}`}
+                      cityName={city.name}
+                      markerClass="origin-marker"
+                      onSubmit={() => void findRoutes()}
+                    />
+                    <button
+                      className="swap-button"
+                      aria-label="Swap starting location and destination"
+                      onClick={() => {
+                        const tempOrigin = origin;
+                        const tempCoords = originCoords;
+                        setOrigin(destination);
+                        setOriginCoords(destCoords);
+                        setDestination(tempOrigin);
+                        setDestCoords(tempCoords);
+                      }}
+                    >
                       <ArrowDownUp size={16} />
                     </button>
-                    <label className="location-input destination-field">
-                      <span className="location-marker destination-marker" />
-                      <span className="input-caption">TO</span>
-                      <input aria-label="Destination" value={destination}
-                        onChange={e => { setDestination(e.target.value); }}
-                        onKeyDown={e => e.key === 'Enter' && void findRoutes()}
-                        placeholder="e.g. Lodhi Garden, New Delhi" />
-                    </label>
+                    <PlaceInput
+                      label="TO"
+                      value={destination}
+                      onChange={val => {
+                        setDestination(val);
+                        setDestCoords(null);
+                      }}
+                      onSelect={place => {
+                        setDestination(place.full);
+                        setDestCoords([place.lat, place.lon]);
+                      }}
+                      placeholder={`e.g. Lodhi Garden, ${city.name}`}
+                      cityName={city.name}
+                      markerClass="destination-marker"
+                      onSubmit={() => void findRoutes()}
+                    />
                   </div>
                   <button className="primary-button plan-button" onClick={() => void findRoutes()}
                     disabled={routeLoading || !origin.trim() || !destination.trim()}>
