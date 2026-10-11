@@ -4,7 +4,7 @@
 
 ### Real-Time Air Quality-Aware Commute Planning Engine
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.5+-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-6.0-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Leaflet](https://img.shields.io/badge/Leaflet-1.9-199900?style=for-the-badge&logo=leaflet&logoColor=white)](https://leafletjs.com/)
@@ -17,7 +17,7 @@
   Airpath transforms urban mobility by routing active commuters through cleaner air corridors — lowering particulate inhalation by up to <b>40%</b> with negligible time compromise.
 </p>
 
-[Live Demo](#live-deployments) • [Key Features](#-key-features) • [Architecture](#-system-architecture) • [AWS Integration](#-aws-open-source--cloud-architecture) • [Quick Start](#-quick-start)
+[Key Features](#-key-features) • [Architecture](#-system-architecture) • [AWS Integration](#-aws-open-source--cloud-architecture) • [Quick Start](#-quick-start) • [Repository Structure](#-repository-structure)
 
 ---
 
@@ -189,7 +189,7 @@ mindmap
   root((Airpath Tech Stack))
     Frontend
       React 18
-      TypeScript 5.5
+      TypeScript 5.6
       Vite 6
       Vanilla CSS Design System
       Lucide React Icons
@@ -211,7 +211,6 @@ mindmap
       Amazon CloudWatch
       Docker & Docker Compose
       GitHub Actions CI/CD
-      Vercel & AWS Amplify
 ```
 
 ---
@@ -255,22 +254,10 @@ chmod +x scripts/init-localstack.sh
 ./scripts/init-localstack.sh
 ```
 
----
-
-## 🌐 Live Deployments
-
-Airpath is production-ready and configured for multiple zero-cost deployment options:
-
-| Platform | Configuration | Status |
-| :--- | :--- | :--- |
-| **Vercel** | [`vercel.json`](file:///c:/Users/ravi5/Downloads/smart-commute-router/smart-commute-router/vercel.json) | Production Ready |
-| **AWS Amplify** | [`amplify.yml`](file:///c:/Users/ravi5/Downloads/smart-commute-router/smart-commute-router/amplify.yml) | Production Ready |
-| **GitHub Pages** | [`.github/workflows/deploy.yml`](file:///c:/Users/ravi5/Downloads/smart-commute-router/smart-commute-router/.github/workflows/deploy.yml) | Automated CI/CD |
-
-### Production Verification Build
+### 4. Production Build & Verification
 
 ```bash
-# Type check and production build
+# Type check TypeScript and compile production bundle
 npm run build
 
 # Preview production output locally
